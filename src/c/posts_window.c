@@ -1,17 +1,8 @@
-// posts_window.c
-// Thread reader — one post at a time.
-// UP   = prev post / prev page
-// DOWN = next post / next page
-// BACK = return to feed
-
 #include <pebble.h>
 #include "rfd_app.h"
 #include "comm.h"
 #include "posts_window.h"
 
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
 static Window      *s_window       = NULL;
 static ScrollLayer *s_scroll_layer = NULL;
 static TextLayer   *s_author_layer = NULL;
@@ -19,6 +10,7 @@ static TextLayer   *s_body_layer   = NULL;
 static TextLayer   *s_header_layer = NULL;
 static TextLayer   *s_nav_layer    = NULL;
 static Layer       *s_header_bg    = NULL;
+static Layer       *s_shadow_layer = NULL;
 
 static int  s_topic_id   = 0;
 static int  s_post_index = 0;
@@ -27,11 +19,22 @@ static char s_author_buf[MAX_AUTHOR_LEN + 4];
 static char s_nav_buf[28];
 
 // ---------------------------------------------------------------------------
+// Shadow
+// ---------------------------------------------------------------------------
+static void shadow_draw(Layer *layer, GContext *ctx) {
+  GRect b = layer_get_bounds(layer);
+  GColor shades[] = { GColorDarkGray, GColorLightGray, GColorLightGray, GColorWhite };
+  for (int i = 0; i < 4; i++) {
+    graphics_context_set_fill_color(ctx, shades[i]);
+    graphics_fill_rect(ctx, GRect(0, i, b.size.w, 1), 0, GCornerNone);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Display update
 // ---------------------------------------------------------------------------
 static void update_display(void) {
   if (!s_window || g_post_count == 0) return;
-
   RfdPost *p = &g_posts[s_post_index];
 
   snprintf(s_author_buf, sizeof(s_author_buf), "@%s", p->author);
@@ -44,20 +47,18 @@ static void update_display(void) {
     g_post_current_page, g_post_total_pages);
   text_layer_set_text(s_nav_layer, s_nav_buf);
 
-  // Resize body to content, then expand scroll area
-  GRect root_b = layer_get_bounds(window_get_root_layer(s_window));
-  int content_w = root_b.size.w - 16;
+  GRect root_b   = layer_get_bounds(window_get_root_layer(s_window));
+  int   content_w = root_b.size.w - 16;
   GSize body_size = text_layer_get_content_size(s_body_layer);
-  int body_h = body_size.h + 8;
+  int   body_h    = body_size.h + 8;
   if (body_h < 60) body_h = 60;
 
   layer_set_frame(text_layer_get_layer(s_body_layer),
-    GRect(8, 30, content_w, body_h));
+    GRect(8, 32, content_w, body_h));
 
-  int total_h = 30 + body_h + 8;
-  if (total_h < root_b.size.h - 36) total_h = root_b.size.h - 36;
-  scroll_layer_set_content_size(s_scroll_layer,
-    GSize(root_b.size.w, total_h));
+  int total_h = 32 + body_h + 8;
+  if (total_h < root_b.size.h - 44) total_h = root_b.size.h - 44;
+  scroll_layer_set_content_size(s_scroll_layer, GSize(root_b.size.w, total_h));
   scroll_layer_set_content_offset(s_scroll_layer, GPointZero, false);
 }
 
@@ -84,9 +85,6 @@ static void go_prev(void) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Click config
-// ---------------------------------------------------------------------------
 static void up_click(ClickRecognizerRef ref, void *ctx)   { go_prev(); }
 static void down_click(ClickRecognizerRef ref, void *ctx) { go_next(); }
 
@@ -112,7 +110,7 @@ void posts_window_on_error(const char *msg) {
 }
 
 // ---------------------------------------------------------------------------
-// Header background draw
+// Header draw
 // ---------------------------------------------------------------------------
 static void header_bg_draw(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
@@ -127,13 +125,13 @@ static void window_load(Window *window) {
   Layer *root   = window_get_root_layer(window);
   GRect  bounds = layer_get_bounds(root);
 
-  // Red header bg
-  s_header_bg = layer_create(GRect(0, 0, bounds.size.w, 20));
+  // Red header bg — 24px
+  s_header_bg = layer_create(GRect(0, 0, bounds.size.w, 24));
   layer_set_update_proc(s_header_bg, header_bg_draw);
   layer_add_child(root, s_header_bg);
 
-  // Title text in header
-  s_header_layer = text_layer_create(GRect(4, 2, bounds.size.w - 8, 16));
+  // Title in header
+  s_header_layer = text_layer_create(GRect(4, 3, bounds.size.w - 8, 18));
   text_layer_set_background_color(s_header_layer, GColorClear);
   text_layer_set_text_color(s_header_layer, RFD_WHITE);
   text_layer_set_font(s_header_layer,
@@ -143,9 +141,14 @@ static void window_load(Window *window) {
   text_layer_set_text(s_header_layer, s_title);
   layer_add_child(root, text_layer_get_layer(s_header_layer));
 
-  // Nav bar at bottom
+  // Shadow below header
+  s_shadow_layer = layer_create(GRect(0, 24, bounds.size.w, 4));
+  layer_set_update_proc(s_shadow_layer, shadow_draw);
+  layer_add_child(root, s_shadow_layer);
+
+  // Nav bar at bottom — red, 20px
   s_nav_layer = text_layer_create(
-    GRect(0, bounds.size.h - 16, bounds.size.w, 16));
+    GRect(0, bounds.size.h - 20, bounds.size.w, 20));
   text_layer_set_background_color(s_nav_layer, RFD_RED);
   text_layer_set_text_color(s_nav_layer, RFD_WHITE);
   text_layer_set_font(s_nav_layer,
@@ -154,48 +157,48 @@ static void window_load(Window *window) {
   text_layer_set_text(s_nav_layer, "Loading...");
   layer_add_child(root, text_layer_get_layer(s_nav_layer));
 
-  // ScrollLayer
-  GRect scroll_frame = GRect(0, 20, bounds.size.w, bounds.size.h - 36);
+  // Shadow above nav bar
+  Layer *bottom_shadow = layer_create(GRect(0, bounds.size.h - 24, bounds.size.w, 4));
+  layer_set_update_proc(bottom_shadow, shadow_draw);
+  layer_add_child(root, bottom_shadow);
+
+  // ScrollLayer for post content
+  GRect scroll_frame = GRect(0, 28, bounds.size.w, bounds.size.h - 52);
   s_scroll_layer = scroll_layer_create(scroll_frame);
   scroll_layer_set_content_size(s_scroll_layer,
     GSize(bounds.size.w, scroll_frame.size.h));
   layer_add_child(root, scroll_layer_get_layer(s_scroll_layer));
 
-  // Author label
-  s_author_layer = text_layer_create(
-    GRect(8, 4, bounds.size.w - 16, 18));
+  // Author — red bold
+  s_author_layer = text_layer_create(GRect(8, 4, bounds.size.w - 16, 20));
   text_layer_set_background_color(s_author_layer, GColorClear);
   text_layer_set_text_color(s_author_layer, RFD_RED);
   text_layer_set_font(s_author_layer,
-    fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD));
-  scroll_layer_add_child(s_scroll_layer,
-    text_layer_get_layer(s_author_layer));
+    fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+  scroll_layer_add_child(s_scroll_layer, text_layer_get_layer(s_author_layer));
 
   // Body text
   s_body_layer = text_layer_create(
-    GRect(8, 30, bounds.size.w - 16, scroll_frame.size.h - 30));
+    GRect(8, 32, bounds.size.w - 16, scroll_frame.size.h - 32));
   text_layer_set_background_color(s_body_layer, GColorClear);
   text_layer_set_text_color(s_body_layer, GColorBlack);
   text_layer_set_font(s_body_layer,
-    fonts_get_system_font(FONT_KEY_GOTHIC_14));
+    fonts_get_system_font(FONT_KEY_GOTHIC_18));
   text_layer_set_overflow_mode(s_body_layer, GTextOverflowModeWordWrap);
-  scroll_layer_add_child(s_scroll_layer,
-    text_layer_get_layer(s_body_layer));
+  scroll_layer_add_child(s_scroll_layer, text_layer_get_layer(s_body_layer));
 
-  // Click config — override scroll layer's defaults
   window_set_click_config_provider(window, click_config);
-
-  // Kick off fetch
   comm_fetch_posts(s_topic_id, 1);
 }
 
 static void window_unload(Window *window) {
-  if (s_scroll_layer)  { scroll_layer_destroy(s_scroll_layer);   s_scroll_layer  = NULL; }
-  if (s_author_layer)  { text_layer_destroy(s_author_layer);     s_author_layer  = NULL; }
-  if (s_body_layer)    { text_layer_destroy(s_body_layer);       s_body_layer    = NULL; }
-  if (s_header_layer)  { text_layer_destroy(s_header_layer);     s_header_layer  = NULL; }
-  if (s_nav_layer)     { text_layer_destroy(s_nav_layer);        s_nav_layer     = NULL; }
-  if (s_header_bg)     { layer_destroy(s_header_bg);             s_header_bg     = NULL; }
+  if (s_scroll_layer)  { scroll_layer_destroy(s_scroll_layer);  s_scroll_layer  = NULL; }
+  if (s_author_layer)  { text_layer_destroy(s_author_layer);    s_author_layer  = NULL; }
+  if (s_body_layer)    { text_layer_destroy(s_body_layer);      s_body_layer    = NULL; }
+  if (s_header_layer)  { text_layer_destroy(s_header_layer);    s_header_layer  = NULL; }
+  if (s_nav_layer)     { text_layer_destroy(s_nav_layer);       s_nav_layer     = NULL; }
+  if (s_header_bg)     { layer_destroy(s_header_bg);            s_header_bg     = NULL; }
+  if (s_shadow_layer)  { layer_destroy(s_shadow_layer);         s_shadow_layer  = NULL; }
   window_destroy(window);
   s_window = NULL;
 }

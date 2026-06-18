@@ -1,29 +1,36 @@
-// feed_window.c
-// Main hot-deals feed using a MenuLayer.
-// SELECT       = open thread
-// LONG SELECT  = toggle filtered feed
-// BACK         = exit
-
 #include <pebble.h>
 #include "rfd_app.h"
 #include "comm.h"
 #include "feed_window.h"
 #include "posts_window.h"
 
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
-static Window    *s_window      = NULL;
-static MenuLayer *s_menu_layer  = NULL;
+static Window    *s_window       = NULL;
+static MenuLayer *s_menu_layer   = NULL;
 static TextLayer *s_status_layer = NULL;
 static Layer     *s_header_layer = NULL;
+static Layer     *s_shadow_layer = NULL;
 
 static bool s_filtered     = false;
 static int  s_current_page = 1;
 static char s_status_buf[48];
 
 // ---------------------------------------------------------------------------
-// Header draw — solid red bar
+// Shadow draw — thin gradient strip below header
+// ---------------------------------------------------------------------------
+static void shadow_draw(Layer *layer, GContext *ctx) {
+  GRect b = layer_get_bounds(layer);
+  // Four progressively lighter grey rows fading downward
+  uint8_t alphas[] = { 80, 50, 25, 10 };
+  GColor shades[]  = { GColorDarkGray, GColorLightGray, GColorLightGray, GColorWhite };
+  for (int i = 0; i < 4; i++) {
+    graphics_context_set_fill_color(ctx, shades[i]);
+    graphics_fill_rect(ctx, GRect(0, i, b.size.w, 1), 0, GCornerNone);
+  }
+  (void)alphas;
+}
+
+// ---------------------------------------------------------------------------
+// Header draw
 // ---------------------------------------------------------------------------
 static void header_draw(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
@@ -32,8 +39,8 @@ static void header_draw(Layer *layer, GContext *ctx) {
   graphics_context_set_text_color(ctx, RFD_WHITE);
   graphics_draw_text(ctx,
     s_filtered ? "RFD  FILTERED" : "RFD  HOT DEALS",
-    fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-    GRect(0, 2, b.size.w, 18),
+    fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+    GRect(0, 1, b.size.w, 22),
     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
@@ -48,7 +55,7 @@ static uint16_t get_num_rows(MenuLayer *ml, uint16_t section, void *ctx) {
 }
 
 static int16_t get_cell_height(MenuLayer *ml, MenuIndex *idx, void *ctx) {
-  return 44;
+  return 48;
 }
 
 static int16_t get_header_height(MenuLayer *ml, uint16_t section, void *ctx) {
@@ -64,45 +71,43 @@ static void draw_row(GContext *ctx, const Layer *cell_layer,
     graphics_context_set_text_color(ctx, GColorDarkGray);
     graphics_draw_text(ctx,
       g_is_loading ? "Loading..." : "SELECT to refresh",
-      fonts_get_system_font(FONT_KEY_GOTHIC_14),
-      GRect(8, 13, b.size.w - 16, 18),
+      fonts_get_system_font(FONT_KEY_GOTHIC_18),
+      GRect(8, 14, b.size.w - 16, 20),
       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
     return;
   }
 
-  // "Load more" row
   if (row >= g_topic_count) {
     graphics_context_set_text_color(ctx, RFD_RED);
     graphics_draw_text(ctx, "Load more...",
-      fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-      GRect(8, 13, b.size.w - 16, 18),
+      fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+      GRect(8, 14, b.size.w - 16, 20),
       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
     return;
   }
 
   RfdTopic *t = &g_topics[row];
 
-  // Title
+  // Title — use Roboto Bold for clean modern look
   graphics_context_set_text_color(ctx, GColorBlack);
   graphics_draw_text(ctx, t->title,
-    fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-    GRect(8, 2, b.size.w - 16, 28),
+    fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+    GRect(8, 2, b.size.w - 16, 30),
     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 
-  // Meta line
+  // Meta — score and replies in smaller grey text
   char meta[32];
   snprintf(meta, sizeof(meta), "^%d  %d replies", t->score, t->replies);
   graphics_context_set_text_color(ctx, GColorDarkGray);
   graphics_draw_text(ctx, meta,
     fonts_get_system_font(FONT_KEY_GOTHIC_14),
-    GRect(8, 28, b.size.w - 16, 14),
+    GRect(8, 33, b.size.w - 16, 14),
     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 }
 
 static void select_click(MenuLayer *ml, MenuIndex *idx, void *ctx) {
   int row = idx->row;
   if (g_topic_count == 0) {
-    g_topic_count = 0;
     comm_fetch_feed(1, 0, s_filtered);
     return;
   }
@@ -133,7 +138,7 @@ static void select_long_click(MenuLayer *ml, MenuIndex *idx, void *ctx) {
 }
 
 // ---------------------------------------------------------------------------
-// Callbacks from callbacks.c
+// Public callbacks from callbacks.c
 // ---------------------------------------------------------------------------
 void feed_window_on_data_ready(void) {
   if (!s_menu_layer) return;
@@ -163,12 +168,17 @@ static void window_load(Window *window) {
   Layer *root   = window_get_root_layer(window);
   GRect  bounds = layer_get_bounds(root);
 
-  // Red header bar (20px)
-  s_header_layer = layer_create(GRect(0, 0, bounds.size.w, 20));
+  // Header bar — 24px tall for slightly more presence
+  s_header_layer = layer_create(GRect(0, 0, bounds.size.w, 24));
   layer_set_update_proc(s_header_layer, header_draw);
   layer_add_child(root, s_header_layer);
 
-  // Status bar (bottom 16px)
+  // Shadow strip — 4px below header
+  s_shadow_layer = layer_create(GRect(0, 24, bounds.size.w, 4));
+  layer_set_update_proc(s_shadow_layer, shadow_draw);
+  layer_add_child(root, s_shadow_layer);
+
+  // Status bar — bottom 16px, red
   s_status_layer = text_layer_create(
     GRect(0, bounds.size.h - 16, bounds.size.w, 16));
   text_layer_set_background_color(s_status_layer, RFD_RED);
@@ -179,8 +189,13 @@ static void window_load(Window *window) {
   text_layer_set_text(s_status_layer, "");
   layer_add_child(root, text_layer_get_layer(s_status_layer));
 
-  // MenuLayer
-  GRect menu_frame = GRect(0, 20, bounds.size.w, bounds.size.h - 36);
+  // Shadow strip above status bar
+  Layer *bottom_shadow = layer_create(GRect(0, bounds.size.h - 20, bounds.size.w, 4));
+  layer_set_update_proc(bottom_shadow, shadow_draw);
+  layer_add_child(root, bottom_shadow);
+
+  // MenuLayer between shadows
+  GRect menu_frame = GRect(0, 28, bounds.size.w, bounds.size.h - 48);
   s_menu_layer = menu_layer_create(menu_frame);
   menu_layer_set_callbacks(s_menu_layer, NULL, (MenuLayerCallbacks){
     .get_num_sections  = get_num_sections,
@@ -195,15 +210,15 @@ static void window_load(Window *window) {
   menu_layer_set_click_config_onto_window(s_menu_layer, window);
   layer_add_child(root, menu_layer_get_layer(s_menu_layer));
 
-  // Initial fetch
   text_layer_set_text(s_status_layer, "Loading...");
   comm_fetch_feed(1, 0, s_filtered);
 }
 
 static void window_unload(Window *window) {
-  if (s_menu_layer)   { menu_layer_destroy(s_menu_layer);    s_menu_layer   = NULL; }
-  if (s_status_layer) { text_layer_destroy(s_status_layer);  s_status_layer = NULL; }
-  if (s_header_layer) { layer_destroy(s_header_layer);        s_header_layer = NULL; }
+  if (s_menu_layer)   { menu_layer_destroy(s_menu_layer);   s_menu_layer   = NULL; }
+  if (s_status_layer) { text_layer_destroy(s_status_layer); s_status_layer = NULL; }
+  if (s_header_layer) { layer_destroy(s_header_layer);      s_header_layer = NULL; }
+  if (s_shadow_layer) { layer_destroy(s_shadow_layer);      s_shadow_layer = NULL; }
   window_destroy(window);
   s_window = NULL;
 }

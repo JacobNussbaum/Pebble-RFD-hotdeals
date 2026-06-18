@@ -70,7 +70,20 @@
         ],
         "projectType": "native",
         "resources": {
-            "media": []
+            "media": [
+                {
+                    "file": "fonts/Roboto_VariableFont_wdth.ttf",
+                    "name": "FONT_KEY_APP_FONT_ROBOTO_BOLD_16",
+                    "targetPlatforms": null,
+                    "type": "font"
+                },
+                {
+                    "file": "fonts/Roboto_VariableFont_wdth2.ttf",
+                    "name": "FONT_KEY_APP_FONT_ROBOTO_BOLD_20",
+                    "targetPlatforms": null,
+                    "type": "font"
+                }
+            ]
         },
         "sdkVersion": "3",
         "targetPlatforms": [
